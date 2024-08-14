@@ -22,7 +22,7 @@ class ReadAndValidateCSV(beam.DoFn):
                             yield {
                                 'name': row[0],
                                 'email': row[1],
-                                'phone_number': row[2],
+                                'location': row[2],
                                 'file_location': file_path  # Add file location here
                             }
                         else:
@@ -53,7 +53,7 @@ def run(argv=None):
         'fields': [
             {'name': 'name', 'type': 'STRING', 'mode': 'NULLABLE'},
             {'name': 'email', 'type': 'STRING', 'mode': 'NULLABLE'},
-            {'name': 'phone_number', 'type': 'STRING', 'mode': 'NULLABLE'},
+            {'name': 'location', 'type': 'STRING', 'mode': 'NULLABLE'},
             {'name': 'timestamp', 'type': 'TIMESTAMP', 'mode': 'NULLABLE'},
             {'name': 'file_location', 'type': 'STRING', 'mode': 'NULLABLE'}  # Add schema for file_location
         ]

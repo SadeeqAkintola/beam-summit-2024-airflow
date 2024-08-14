@@ -9,6 +9,8 @@ import sendgrid
 from sendgrid.helpers.mail import Mail
 import os
 from datetime import datetime
+import vertexai
+from vertexai.generative_models import GenerativeModel, SafetySetting
 
 # Define the DAG
 dag = DAG(
@@ -99,10 +101,10 @@ beam_task = DataflowCreatePythonJobOperator(
     dag=dag,
 )
 
-# Task 3: Fetch records to send emails to
+# Task 3: Fetch records to send emails to, including location
 def query_bigquery():
     query = """
-    SELECT name, email 
+    SELECT name, email, location
     FROM `beam-summit-2024-airflow.beam_2024_attendees.registrations`
     WHERE (is_email_sent IS NULL OR is_email_sent = FALSE) 
     AND (email <> "")
@@ -116,6 +118,39 @@ query_bigquery_task = PythonOperator(
     dag=dag,
 )
 
+# Function to describe the location using Vertex AI
+def describe_this_location(location):
+    vertexai.init(project="beam-summit-2024-airflow", location="us-central1")
+    model = GenerativeModel("gemini-1.5-flash-001")
+    response = model.generate_content(
+        f"Tell me some fun facts about {location} in 150 words",
+        generation_config={
+            "max_output_tokens": 8192,
+            "temperature": 1,
+            "top_p": 0.95,
+        },
+        safety_settings=[
+            SafetySetting(
+                category=SafetySetting.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+            ),
+            SafetySetting(
+                category=SafetySetting.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+            ),
+            SafetySetting(
+                category=SafetySetting.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+            ),
+            SafetySetting(
+                category=SafetySetting.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+            ),
+        ],
+        stream=False
+    )
+    return response.text.strip()
+
 # Task 4: Send email to the identified users
 def send_email(**context):
     sg = sendgrid.SendGridAPIClient(api_key=os.environ['SENDGRID_API_KEY'])
@@ -124,15 +159,37 @@ def send_email(**context):
     for _, row in results.iterrows():
         name = row['name']
         email = row['email']
+        location = row['location']
+        
+        # Generate fun facts about the location
+        location_funfact = describe_this_location(location)
+        
+        # Convert the fun facts into bullet points
+        bullet_points = ''.join([f'<li>{sentence.strip()}</li>' for sentence in location_funfact.split('.') if sentence.strip()])
+
+        # Create the email content in HTML format
         subject = 'Welcome to BEAM Summit 2024 Demo by Sadeeq Akintola'
         content = f"""
-        Dear {name}, 
-        Thank you for attending my BEAM Summit 2024 session, and testing the demo - It means a lot! Please be informed that your csv file containing {email} has been successfully uploaded.
+        <html>
+        <body>
+            <p>Dear {name},</p>
+            
+            <p>Thank you for attending my BEAM Summit 2024 session <a href="https://beamsummit.org/sessions/2024/reuniting-the-two-distant-cousins-calling-a-beam-pipeline-from-an-airflow-job/">https://beamsummit.org/sessions/2024/reuniting-the-two-distant-cousins-calling-a-beam-pipeline-from-an-airflow-job/</a>, and testing out the demo! It means a lot to me!! Here is the link to the source code: <a href="https://github.com/SadeeqAkintola/beam-summit-2024-airflow">https://github.com/SadeeqAkintola/beam-summit-2024-airflow</a>. Fork it, Star it, and Share it, please.</p>
 
-        Sincerely yours in Data Engineering,
-        Sadeeq
+            <p>Please be informed that your CSV file containing <strong>{email}</strong> has been successfully uploaded.</p>
+
+            <p><em>By the way, here are some fun facts about your {location} (generated, with love, by Google's powerful gemini-1.5-flash model):</em></p>
+            <ul>{bullet_points}</ul>
+            
+            <p>Sincerely yours in Data Engineering,</p>
+            <p><strong>Sadeeq</strong></p>
+            <p>Follow on X for more: <a href="https://x.com/SadeeqAkintola">https://x.com/SadeeqAkintola</a></p>
+        </body>
+        </html>
         """
-        mail = Mail(from_email='datatalkswithsadeeq@gmail.com', to_emails=email, subject=subject, plain_text_content=content)
+        
+        # Send the email
+        mail = Mail(from_email='datatalkswithsadeeq@gmail.com', to_emails=email, subject=subject, html_content=content)
         response = sg.send(mail)
         
         print(f'Sent email to: {email} | Status Code: {response.status_code}')
